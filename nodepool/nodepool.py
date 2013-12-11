@@ -963,10 +963,14 @@ class SnapshotImageUpdater(ImageUpdater):
             raise Exception("Unable to find public IP of server")
         server['public_ip'] = ip
 
+        self.installServer(server, key, use_password=use_password)
+
         self.bootstrapServer(server, key, use_password=use_password)
 
-        image_id = self.manager.createImage(server, hostname,
-                                            self.image.meta)['id']
+        self.waitForShutOffIfRequested(server_id)
+
+        image_id = self.manager.createImage(server_id, hostname,
+                                            self.image.meta)
         self.snap_image.external_id = image_id
         session.commit()
         self.log.debug("Image id: %s building image %s" %
@@ -1001,10 +1005,27 @@ class SnapshotImageUpdater(ImageUpdater):
                                " %s for image id: %s" %
                                (server_id, self.snap_image.id))
 
-    def bootstrapServer(self, server, key, use_password=False):
-        log = logging.getLogger("nodepool.image.build.%s.%s" %
-                                (self.provider.name, self.image.name))
+    def serverIsOff(self, server_id):
+        return self.manager.getServer(server_id)['status'] == 'SHUTOFF'
 
+    def waitForShutOffIfRequested(self, server_id):
+        if not self.image.wait_for_shutoff_before_snapshot:
+            return
+
+        remaining_sleeps = self.image.shutoff_poll_count
+        while remaining_sleeps:
+            if self.serverIsOff(server_id):
+                self.log.debug("Server in SHUTOFF state, no more sleeps")
+                break
+            self.log.debug("%s more sleep(s) to wait for SHUTOFF",
+                           remaining_sleeps)
+            time.sleep(self.image.shutoff_poll_interval)
+            remaining_sleeps -= 1
+
+        if not self.serverIsOff(server_id):
+            raise Exception("Cloud reports, server is still not in SHUTOFF")
+
+    def getSSHConnection(self, server, key, log, use_password):
         ssh_kwargs = dict(log=log)
         if not use_password:
             ssh_kwargs['pkey'] = key
@@ -1032,6 +1053,10 @@ class SnapshotImageUpdater(ImageUpdater):
         if not host:
             raise Exception("Unable to log in via SSH")
 
+        return host
+
+    def copyNodepoolScripts(self, host):
+        host.ssh("make scripts dir", "mkdir -p scripts")
         # /etc/nodepool is world writable because by the time we write
         # the contents after the node is launched, we may not have
         # sudo access any more.
@@ -1048,6 +1073,15 @@ class SnapshotImageUpdater(ImageUpdater):
                      "sudo mv scripts /opt/nodepool-scripts")
             host.ssh("set scripts permissions",
                      "sudo chmod -R a+rx /opt/nodepool-scripts")
+
+    def bootstrapServer(self, server, key, use_password=False):
+        log = logging.getLogger("nodepool.image.build.%s.%s" %
+                                (self.provider.name, self.image.name))
+        host = self.getSSHConnection(server, key, log, use_password)
+        if not host:
+            raise Exception("Unable to log in via SSH")
+
+        self.copyNodepoolScripts(host)
 
         if self.image.setup:
             env_vars = ''
@@ -1066,6 +1100,53 @@ class SnapshotImageUpdater(ImageUpdater):
                      "%s; cd /opt/nodepool-scripts "
                      "&& %s ./%s %s && sync && sleep 5" %
                      (set_path, env_vars, self.image.setup, server['name']))
+
+    def installServer(self, server, key, use_password=False):
+        if not self.image.install:
+            return
+
+        log = logging.getLogger("nodepool.image.install.%s.%s" %
+                                (self.provider.name, self.image.name))
+
+        host = self.getSSHConnection(server, key, log, use_password)
+        if not host:
+            raise Exception("Unable to log in via SSH")
+
+        self.copyNodepoolScripts(host)
+
+        host.ssh("run install script",
+                 "cd /opt/nodepool-scripts && %s ./%s" % (
+                     get_nodepool_env_string(), self.image.install))
+
+        host.close()
+        self.waitForInstallationToCompete(server, key, use_password)
+
+    def waitForInstallationToCompete(self, server, key, use_password):
+        if not self.image.install_done_stamp:
+            return
+
+        log = logging.getLogger("nodepool.image.install.wait.%s.%s" %
+                                (self.provider.name, self.image.name))
+
+        remaining_polls = self.image.install_poll_count
+
+        while remaining_polls:
+            host = self.getSSHConnection(server, key, log, use_password)
+            if host:
+                status = host.ssh(
+                    "check install status",
+                    "test -e %s && echo DONE || true" % (
+                        self.image.install_done_stamp),
+                    output=True)
+                host.close()
+                status = status or ''
+                if "DONE" in status:
+                    return
+            remaining_polls -= 1
+            time.sleep(self.image.install_poll_interval)
+
+        raise Exception(
+            'Failed to install host - max number of polls reached')
 
 
 class NodePool(threading.Thread):
@@ -1110,9 +1191,207 @@ class NodePool(threading.Thread):
 
     def loadConfig(self):
         self.log.debug("Loading configuration")
-        config = nodepool_config.loadConfig(self.configfile)
-        nodepool_config.loadSecureConfig(config, self.securefile)
-        return config
+        secure = ConfigParser.ConfigParser()
+        secure.readfp(open(self.securefile))
+        config = yaml.load(open(self.configfile))
+        cloud_config = os_client_config.OpenStackConfig()
+
+        newconfig = Config()
+        newconfig.db = None
+        newconfig.dburi = None
+        newconfig.providers = {}
+        newconfig.targets = {}
+        newconfig.labels = {}
+        newconfig.scriptdir = config.get('script-dir')
+        newconfig.elementsdir = config.get('elements-dir')
+        newconfig.imagesdir = config.get('images-dir')
+        newconfig.dburi = secure.get('database', 'dburi')
+        newconfig.provider_managers = {}
+        newconfig.jenkins_managers = {}
+        newconfig.zmq_publishers = {}
+        newconfig.gearman_servers = {}
+        newconfig.diskimages = {}
+        newconfig.crons = {}
+
+        for name, default in [
+            ('image-update', '14 2 * * *'),
+            ('cleanup', '* * * * *'),
+            ('check', '*/15 * * * *'),
+            ]:
+            c = Cron()
+            c.name = name
+            newconfig.crons[c.name] = c
+            c.job = None
+            c.timespec = config.get('cron', {}).get(name, default)
+
+        for addr in config['zmq-publishers']:
+            z = ZMQPublisher()
+            z.name = addr
+            z.listener = None
+            newconfig.zmq_publishers[z.name] = z
+
+        for server in config.get('gearman-servers', []):
+            g = GearmanServer()
+            g.host = server['host']
+            g.port = server.get('port', 4730)
+            g.name = g.host + '_' + str(g.port)
+            newconfig.gearman_servers[g.name] = g
+
+        for provider in config['providers']:
+            p = Provider()
+            p.name = provider['name']
+            newconfig.providers[p.name] = p
+
+            cloud_kwargs = _cloudKwargsFromProvider(provider)
+            p.cloud_config = _get_one_cloud(cloud_config, cloud_kwargs)
+            p.region_name = provider.get('region-name')
+            p.max_servers = provider['max-servers']
+            p.keypair = provider.get('keypair', None)
+            p.pool = provider.get('pool')
+            p.rate = provider.get('rate', 1.0)
+            p.api_timeout = provider.get('api-timeout')
+            p.boot_timeout = provider.get('boot-timeout', 60)
+            p.launch_timeout = provider.get('launch-timeout', 3600)
+            p.use_neutron = bool(provider.get('networks', ()))
+            p.networks = provider.get('networks')
+            p.ipv6_preferred = provider.get('ipv6-preferred')
+            p.azs = provider.get('availability-zones')
+            p.template_hostname = provider.get(
+                'template-hostname',
+                'template-{image.name}-{timestamp}'
+            )
+            p.image_type = provider.get('image-type', 'qcow2')
+            p.images = {}
+            for image in provider['images']:
+                i = ProviderImage()
+                i.name = image['name']
+                p.images[i.name] = i
+                i.base_image = image.get('base-image', None)
+                i.min_ram = image['min-ram']
+                i.name_filter = image.get('name-filter', None)
+                i.setup = image.get('setup', None)
+                i.install = image.get('install')
+                i.install_done_stamp = image.get('install-done-stamp', None)
+                i.install_poll_interval = image.get('install-poll-interval',
+                                                    10)
+                i.install_poll_count = image.get('install-poll-count', 60)
+                i.wait_for_shutoff_before_snapshot = image.get(
+                    'wait-for-shutoff-before-snapshot', False)
+                i.shutoff_poll_interval = image.get('shutoff-poll-interval', 0)
+                i.shutoff_poll_count = image.get('shutoff-poll-count', 0)
+                i.diskimage = image.get('diskimage', None)
+                i.username = image.get('username', 'jenkins')
+                i.user_home = image.get('user-home', '/home/jenkins')
+                i.private_key = image.get('private-key',
+                                          '/var/lib/jenkins/.ssh/id_rsa')
+                i.config_drive = image.get('config-drive', None)
+
+                # note this does "double-duty" -- for
+                # SnapshotImageUpdater the meta-data dict is passed to
+                # nova when the snapshot image is created.  For
+                # DiskImageUpdater, this dict is expanded and used as
+                # custom properties when the image is uploaded.
+                i.meta = image.get('meta', {})
+                # 5 elements, and no key or value can be > 255 chars
+                # per novaclient.servers.create() rules
+                if i.meta:
+                    if len(i.meta) > 5 or \
+                       any([len(k) > 255 or len(v) > 255
+                            for k, v in i.meta.iteritems()]):
+                        # soft-fail
+                        self.log.error("Invalid metadata for %s; ignored"
+                                       % i.name)
+                        i.meta = {}
+
+        if 'diskimages' in config:
+            for diskimage in config['diskimages']:
+                d = DiskImage()
+                d.name = diskimage['name']
+                newconfig.diskimages[d.name] = d
+                if 'elements' in diskimage:
+                    d.elements = u' '.join(diskimage['elements'])
+                else:
+                    d.elements = ''
+                # must be a string, as it's passed as env-var to
+                # d-i-b, but might be untyped in the yaml and
+                # interpreted as a number (e.g. "21" for fedora)
+                d.release = str(diskimage.get('release', ''))
+                d.env_vars = diskimage.get('env-vars', {})
+                if not isinstance(d.env_vars, dict):
+                    self.log.error("%s: ignoring env-vars; "
+                                   "should be a dict" % d.name)
+                    d.env_vars = {}
+                d.image_types = set()
+            # Do this after providers to build the image-types
+            for provider in newconfig.providers.values():
+                for image in provider.images.values():
+                    if (image.diskimage and
+                        image.diskimage in newconfig.diskimages):
+                        diskimage = newconfig.diskimages[image.diskimage]
+                        diskimage.image_types.add(provider.image_type)
+
+        for label in config['labels']:
+            l = Label()
+            l.name = label['name']
+            newconfig.labels[l.name] = l
+            l.image = label['image']
+            l.min_ready = label.get('min-ready', 2)
+            l.subnodes = label.get('subnodes', 0)
+            l.ready_script = label.get('ready-script')
+            l.providers = {}
+            for provider in label['providers']:
+                p = LabelProvider()
+                p.name = provider['name']
+                l.providers[p.name] = p
+
+        for target in config['targets']:
+            # look at secure file for that section
+            section_name = 'jenkins "%s"' % target['name']
+            t = Target()
+            t.name = target['name']
+            newconfig.targets[t.name] = t
+            t.online = True
+
+            if secure.has_section(section_name):
+                t.jenkins_url = secure.get(section_name, 'url')
+                t.jenkins_user = secure.get(section_name, 'user')
+                t.jenkins_apikey = secure.get(section_name, 'apikey')
+            else:
+                t.jenkins_url = None
+                t.jenkins_user = None
+                t.jenkins_apikey = None
+
+            t.rate = target.get('rate', 1.0)
+            try:
+                t.jenkins_credentials_id = secure.get(
+                    section_name, 'credentials')
+            except:
+                t.jenkins_credentials_id = None
+
+            jenkins = target.get('jenkins')
+            if jenkins:
+                t.jenkins_test_job = jenkins.get('test-job', None)
+            else:
+                t.jenkins_test_job = None
+
+            t.hostname = target.get(
+                'hostname',
+                '{label.name}-{provider.name}-{node_id}'
+            )
+            t.subnode_hostname = target.get(
+                'subnode-hostname',
+                '{label.name}-{provider.name}-{node_id}-{subnode_id}'
+            )
+
+        # A set of image names that are in use by labels, to be
+        # used by the image update methods to determine whether
+        # a given image needs to be updated.
+        newconfig.images_in_use = set()
+        for label in newconfig.labels.values():
+            if label.min_ready >= 0:
+                newconfig.images_in_use.add(label.image)
+
+        return newconfig
 
     def reconfigureDatabase(self, config):
         if (not self.config) or config.dburi != self.config.dburi:
@@ -2235,5 +2514,14 @@ class NodePool(threading.Thread):
             keys.append('nodepool.launch.provider.%s.%s.%s' %
                         (provider_name, node_az, subkey))
         for key in keys:
-            self.statsd.timing(key, dt)
-            self.statsd.incr(key)
+            statsd.timing(key, dt)
+            statsd.incr(key)
+
+
+def get_nodepool_env_string():
+    env_vars = ''
+    for k, v in os.environ.items():
+        if k.startswith('NODEPOOL_'):
+            env_vars += ' %s="%s"' % (k, v)
+
+    return env_vars
