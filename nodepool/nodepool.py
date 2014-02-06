@@ -293,7 +293,7 @@ class NodeLauncher(threading.Thread):
     def launchNode(self, session):
         start_time = time.time()
 
-        hostname = '%s-%s-%s.slave.openstack.org' % (
+        hostname = '%s-%s-%s.slave.xenserver.org' % (
             self.image.name, self.provider.name, self.node.id)
         self.node.hostname = hostname
         self.node.nodename = hostname.split('.')[0]
@@ -443,7 +443,7 @@ class ImageUpdater(threading.Thread):
         start_time = time.time()
         timestamp = int(start_time)
 
-        hostname = ('%s-%s.template.openstack.org' %
+        hostname = ('%s-%s.template.xenserver.org' %
                     (self.image.name, str(timestamp)))
         self.log.info("Creating image id: %s with hostname %s for %s in %s" %
                       (self.snap_image.id, hostname, self.image.name,
