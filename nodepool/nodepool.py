@@ -372,7 +372,8 @@ class NodeLauncher(threading.Thread):
         while remaining_polls:
             try:
                 host = utils.ssh_connect(ip, username, connect_kwargs, timeout=CONNECT_TIMEOUT)
-            except:
+            except Exception as e:
+                self.log.debug("Poll %s: Ignored ssh connection error %s", remaining_polls, e)
                 host = None
 
             if host:
