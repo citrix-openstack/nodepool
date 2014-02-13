@@ -330,6 +330,8 @@ class NodeLauncher(threading.Thread):
         self.node.ip = ip
         connect_kwargs = dict(key_filename=self.image.private_key)
 
+        self.waitForLaunchStamp(ip, self.image.username, connect_kwargs)
+
         self.log.debug("Node id: %s is running, ip: %s, testing ssh" %
                        (self.node.id, ip))
         if not utils.ssh_connect(ip, self.image.username,
@@ -360,6 +362,30 @@ class NodeLauncher(threading.Thread):
             self.log.debug("Adding node id: %s to jenkins" % self.node.id)
             self.createJenkinsNode()
             self.log.info("Node id: %s added to jenkins" % self.node.id)
+
+    def waitForLaunchStamp(self, ip, username, connect_kwargs):
+        if not self.image.launch_done_stamp:
+            return
+
+        remaining_polls = self.image.launch_poll_count
+
+        while remaining_polls:
+            host = utils.ssh_connect(ip, username, connect_kwargs)
+            if host:
+                status = host.ssh(
+                    "check launch status",
+                    "test -e %s && echo DONE || true" % (
+                        self.image.launch_done_stamp),
+                    output=True)
+                host.close()
+                status = status or ''
+                if "DONE" in status:
+                    return
+            remaining_polls -= 1
+            time.sleep(self.image.launch_poll_interval)
+
+        raise Exception(
+            'Failed to launch host - max number of polls reached')
 
     def createJenkinsNode(self):
         jenkins = self.nodepool.getJenkinsManager(self.target)
@@ -741,6 +767,9 @@ class NodePool(threading.Thread):
                 i.install_done_stamp = image.get('install-done-stamp')
                 i.install_poll_interval = image.get('install-poll-interval', 30)
                 i.install_poll_count = image.get('install-poll-count', 10)
+                i.launch_done_stamp = image.get('launch-done-stamp')
+                i.launch_poll_interval = image.get('launch-poll-interval', 30)
+                i.launch_poll_count = image.get('launch-poll-count', 10)
                 i.reset = image.get('reset')
                 i.username = image.get('username', 'jenkins')
                 i.private_key = image.get('private-key',
