@@ -605,9 +605,9 @@ class ImageUpdater(threading.Thread):
                  "cd /opt/nodepool-scripts && ./%s" % self.image.install)
 
         host.close()
-        self.waitForInstallationToCompete(server, key)
+        self.waitForInstallationToCompete(server, key, use_password)
 
-    def waitForInstallationToCompete(self, server, key):
+    def waitForInstallationToCompete(self, server, key, use_password):
         if not self.image.install_done_stamp:
             return
 
@@ -617,7 +617,7 @@ class ImageUpdater(threading.Thread):
         remaining_polls = self.image.install_poll_count
 
         while remaining_polls:
-            host = self.getSSHConnection(server, key, log)
+            host = self.getSSHConnection(server, key, log, use_password)
             if host:
                 status = host.ssh(
                     "check install status",
