@@ -38,7 +38,7 @@ def iterate_timeout(max_seconds, purpose):
 
 
 def ssh_connect(ip, username, connect_kwargs={}, timeout=60):
-    log.debug('SSH Connection to %s@%s params=%s', ip, username, connect_kwargs)
+    log.debug('SSH Connection to %s@%s params=%s', username, ip, connect_kwargs)
     if ip == 'fake':
         return fakeprovider.FakeSSHClient()
     # HPcloud may return ECONNREFUSED or EHOSTUNREACH
