@@ -370,7 +370,7 @@ class NodeLauncher(threading.Thread):
         remaining_polls = self.image.launch_poll_count
 
         while remaining_polls:
-            host = utils.ssh_connect(ip, username, connect_kwargs)
+            host = utils.ssh_connect(ip, username, connect_kwargs, timeout=CONNECT_TIMEOUT)
             if host:
                 status = host.ssh(
                     "check launch status",
