@@ -525,6 +525,8 @@ class ImageUpdater(threading.Thread):
 
         self.bootstrapServer(server, key, use_password=use_password)
 
+        time.sleep(self.image.pre_snapshot_timeout)
+
         image_id = self.manager.createImage(server_id, hostname)
         self.snap_image.external_id = image_id
         session.commit()
@@ -781,6 +783,7 @@ class NodePool(threading.Thread):
                 i.launch_done_stamp = image.get('launch-done-stamp')
                 i.launch_poll_interval = image.get('launch-poll-interval', 30)
                 i.launch_poll_count = image.get('launch-poll-count', 10)
+                i.pre_snapshot_timeout = image.get('pre-snapshot-timeout', 0)
                 i.reset = image.get('reset')
                 i.username = image.get('username', 'jenkins')
                 i.private_key = image.get('private-key',
