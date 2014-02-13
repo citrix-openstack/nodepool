@@ -328,9 +328,10 @@ class NodeLauncher(threading.Thread):
             raise Exception("Unable to find public IP of server")
 
         self.node.ip = ip
+        connect_kwargs = dict(key_filename=self.image.private_key)
+
         self.log.debug("Node id: %s is running, ip: %s, testing ssh" %
                        (self.node.id, ip))
-        connect_kwargs = dict(key_filename=self.image.private_key)
         if not utils.ssh_connect(ip, self.image.username,
                                  connect_kwargs=connect_kwargs,
                                  timeout=self.timeout):
