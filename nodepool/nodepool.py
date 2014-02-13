@@ -330,6 +330,8 @@ class NodeLauncher(threading.Thread):
         self.node.ip = ip
         connect_kwargs = dict(key_filename=self.image.private_key)
 
+        self.log.info("Node id: %s is ACTIVE, ip: %s, waiting for launch condition" %
+                       (self.node.id, ip))
         self.waitForLaunchStamp(ip, self.image.username, connect_kwargs)
 
         self.log.debug("Node id: %s is running, ip: %s, testing ssh" %
@@ -365,7 +367,10 @@ class NodeLauncher(threading.Thread):
 
     def waitForLaunchStamp(self, ip, username, connect_kwargs):
         if not self.image.launch_done_stamp:
+            self.log.info("No launch condition specified")
             return
+
+        self.log.info("Waiting for stamp file: %s", self.image.launch_done_stamp)
 
         remaining_polls = self.image.launch_poll_count
 
@@ -373,7 +378,7 @@ class NodeLauncher(threading.Thread):
             try:
                 host = utils.ssh_connect(ip, username, connect_kwargs, timeout=CONNECT_TIMEOUT)
             except Exception as e:
-                self.log.debug("Poll %s: Ignored ssh connection error %s", remaining_polls, e)
+                self.log.info("Poll %s: Ignored ssh connection error %s", remaining_polls, e)
                 host = None
 
             if host:
@@ -385,6 +390,7 @@ class NodeLauncher(threading.Thread):
                 host.close()
                 status = status or ''
                 if "DONE" in status:
+                    self.log.info("Launch stamp found")
                     return
             remaining_polls -= 1
             time.sleep(self.image.launch_poll_interval)
