@@ -22,7 +22,6 @@ import gear
 import json
 import logging
 import os.path
-import paramiko
 import re
 import threading
 import time
@@ -329,19 +328,14 @@ class NodeLauncher(threading.Thread):
             raise Exception("Unable to find public IP of server")
 
         self.node.ip = ip
+        connect_kwargs = dict(key_filename=self.image.private_key)
 
-        if self.image.launch_done_stamp:
-            waitForFile(
-                server,
-                paramiko.RSAKey.from_private_key_file(self.image.private_key),
-                self.image.launch_done_stamp,
-                self.image.launch_poll_count,
-                self.image.launch_poll_interval,
-                self.log)
+        self.log.info("Node id: %s is ACTIVE, ip: %s, waiting for launch condition" %
+                       (self.node.id, ip))
+        self.waitForLaunchStamp(ip, self.image.username, connect_kwargs)
 
         self.log.debug("Node id: %s is running, ip: %s, testing ssh" %
                        (self.node.id, ip))
-        connect_kwargs = dict(key_filename=self.image.private_key)
         if not utils.ssh_connect(ip, self.image.username,
                                  connect_kwargs=connect_kwargs,
                                  timeout=self.timeout):
@@ -370,6 +364,39 @@ class NodeLauncher(threading.Thread):
             self.log.debug("Adding node id: %s to jenkins" % self.node.id)
             self.createJenkinsNode()
             self.log.info("Node id: %s added to jenkins" % self.node.id)
+
+    def waitForLaunchStamp(self, ip, username, connect_kwargs):
+        if not self.image.launch_done_stamp:
+            self.log.info("No launch condition specified")
+            return
+
+        self.log.info("Waiting for stamp file: %s", self.image.launch_done_stamp)
+
+        remaining_polls = self.image.launch_poll_count
+
+        while remaining_polls:
+            try:
+                host = utils.ssh_connect(ip, username, connect_kwargs)
+            except Exception as e:
+                self.log.info("Poll %s: Ignored ssh connection error %s", remaining_polls, e)
+                host = None
+
+            if host:
+                status = host.ssh(
+                    "check launch status",
+                    "test -e %s && echo DONE || true" % (
+                        self.image.launch_done_stamp),
+                    output=True)
+                host.close()
+                status = status or ''
+                if "DONE" in status:
+                    self.log.info("Launch stamp found")
+                    return
+            remaining_polls -= 1
+            time.sleep(self.image.launch_poll_interval)
+
+        raise Exception(
+            'Failed to launch host - max number of polls reached')
 
     def createJenkinsNode(self):
         jenkins = self.nodepool.getJenkinsManager(self.target)
@@ -450,7 +477,7 @@ class ImageUpdater(threading.Thread):
                        self.provider.name))
         if self.provider.keypair:
             key_name = self.provider.keypair
-            key = paramiko.RSAKey.from_private_key_file(self.image.private_key)
+            key = None
             use_password = False
         elif self.manager.hasExtension('os-keypairs'):
             key_name = hostname.split('.')[0]
@@ -498,6 +525,8 @@ class ImageUpdater(threading.Thread):
 
         self.bootstrapServer(server, key, use_password=use_password)
 
+        time.sleep(self.image.pre_snapshot_timeout)
+
         image_id = self.manager.createImage(server_id, hostname)
         self.snap_image.external_id = image_id
         session.commit()
@@ -527,6 +556,21 @@ class ImageUpdater(threading.Thread):
                                " %s for image id: %s" %
                                (server_id, self.snap_image.id))
 
+    def getSSHConnection(self, server, key, log, use_password):
+        ssh_kwargs = dict(log=log)
+        if not use_password:
+            ssh_kwargs['pkey'] = key
+        else:
+            ssh_kwargs['password'] = server['admin_pass']
+
+        for username in ['root', 'ubuntu']:
+            host = utils.ssh_connect(server['public_v4'], username,
+                                     ssh_kwargs,
+                                     timeout=CONNECT_TIMEOUT)
+            if host:
+                break
+        return host
+
     def copyNodepoolScripts(self, host):
         host.ssh("make scripts dir", "mkdir -p scripts")
         for fname in os.listdir(self.scriptdir):
@@ -542,7 +586,7 @@ class ImageUpdater(threading.Thread):
     def bootstrapServer(self, server, key, use_password=False):
         log = logging.getLogger("nodepool.image.build.%s.%s" %
                                 (self.provider.name, self.image.name))
-        host = getSSHConnection(server, key, log, use_password)
+        host = self.getSSHConnection(server, key, log, use_password)
         if not host:
             raise Exception("Unable to log in via SSH")
 
@@ -564,7 +608,7 @@ class ImageUpdater(threading.Thread):
         log = logging.getLogger("nodepool.image.install.%s.%s" %
                                 (self.provider.name, self.image.name))
 
-        host = getSSHConnection(server, key, log, use_password)
+        host = self.getSSHConnection(server, key, log, use_password)
         if not host:
             raise Exception("Unable to log in via SSH")
 
@@ -574,61 +618,34 @@ class ImageUpdater(threading.Thread):
                  "cd /opt/nodepool-scripts && ./%s" % self.image.install)
 
         host.close()
-        self.waitForInstallationToCompete(server, key)
+        self.waitForInstallationToCompete(server, key, use_password)
 
-    def waitForInstallationToCompete(self, server, key):
-        if not self.image.install_status_file:
+    def waitForInstallationToCompete(self, server, key, use_password):
+        if not self.image.install_done_stamp:
             return
 
         log = logging.getLogger("nodepool.image.install.wait.%s.%s" %
                                 (self.provider.name, self.image.name))
 
-        waitForFile(
-            server,
-            key,
-            path=self.image.install_status_file,
-            max_polls=self.image.install_poll_count,
-            poll_interval=self.image.install_poll_interval,
-            log=log)
+        remaining_polls = self.image.install_poll_count
 
+        while remaining_polls:
+            host = self.getSSHConnection(server, key, log, use_password)
+            if host:
+                status = host.ssh(
+                    "check install status",
+                    "test -e %s && echo DONE || true" % (
+                        self.image.install_done_stamp),
+                    output=True)
+                host.close()
+                status = status or ''
+                if "DONE" in status:
+                    return
+            remaining_polls -= 1
+            time.sleep(self.image.install_poll_interval)
 
-def getSSHConnection(server, key, log, use_password):
-    ssh_kwargs = dict(log=log)
-    if not use_password:
-        ssh_kwargs['pkey'] = key
-    else:
-        ssh_kwargs['password'] = server['admin_pass']
-
-    for username in ['root', 'ubuntu']:
-        host = utils.ssh_connect(server['public_v4'], username,
-                                 ssh_kwargs,
-                                 timeout=CONNECT_TIMEOUT)
-        if host:
-            break
-    return host
-
-
-def waitForFile(server, key, path, max_polls, poll_interval, log,
-                use_password=False):
-    remaining_polls = max_polls
-
-    while remaining_polls:
-        host = getSSHConnection(server, key, log, use_password)
-        if host:
-            status = host.ssh(
-                "check install status",
-                "test -e %s && echo DONE || true" % path,
-                output=True)
-            host.close()
-            status = status or ''
-            if "DONE" in status:
-                return
-        remaining_polls -= 1
-        time.sleep(poll_interval)
-
-    raise Exception(
-        'No file found at %s within %s polls with %s intervals' % (
-            path, max_polls, poll_interval))
+        raise Exception(
+            'Failed to install host - max number of polls reached')
 
 
 class ConfigValue(object):
@@ -760,13 +777,13 @@ class NodePool(threading.Thread):
                 i.name_filter = image.get('name-filter', None)
                 i.setup = image.get('setup')
                 i.install = image.get('install')
-                i.install_status_file = image.get('install_status_file')
-                i.install_poll_interval = image.get('install_poll_interval',
-                                                    30)
-                i.install_poll_count = image.get('install_poll_count', 10)
-                i.launch_done_stamp = image.get('launch_done_stamp')
-                i.launch_poll_interval = image.get('launch_poll_interval', 30)
-                i.launch_poll_count = image.get('launch_poll_count', 10)
+                i.install_done_stamp = image.get('install-done-stamp')
+                i.install_poll_interval = image.get('install-poll-interval', 30)
+                i.install_poll_count = image.get('install-poll-count', 10)
+                i.launch_done_stamp = image.get('launch-done-stamp')
+                i.launch_poll_interval = image.get('launch-poll-interval', 30)
+                i.launch_poll_count = image.get('launch-poll-count', 10)
+                i.pre_snapshot_timeout = image.get('pre-snapshot-timeout', 0)
                 i.reset = image.get('reset')
                 i.username = image.get('username', 'jenkins')
                 i.private_key = image.get('private-key',
