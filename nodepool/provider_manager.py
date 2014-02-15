@@ -217,6 +217,8 @@ class ProviderManager(TaskManager):
             kwargs['service_name'] = self.provider.service_name
         if self.provider.region_name:
             kwargs['region_name'] = self.provider.region_name
+        if self.provider.auth_system:
+            kwargs['auth_system'] = self.provider.auth_system
         if self.provider.auth_url == 'fake':
             return fakeprovider.FAKE_CLIENT
         return novaclient.client.Client(*args, **kwargs)
