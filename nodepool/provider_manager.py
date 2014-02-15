@@ -20,6 +20,7 @@ import logging
 import paramiko
 import novaclient
 import novaclient.client
+import novaclient.auth_plugin
 import time
 
 import fakeprovider
@@ -219,6 +220,11 @@ class ProviderManager(TaskManager):
             kwargs['region_name'] = self.provider.region_name
         if self.provider.auth_system:
             kwargs['auth_system'] = self.provider.auth_system
+            if self.provider.auth_system != 'keystone':
+                # Discover available auth plugins
+                novaclient.auth_plugin.discover_auth_systems()
+                auth_plugin = novaclient.auth_plugin.load_plugin(self.provider.auth_system)
+                kwargs['auth_plugin'] = auth_plugin
         if self.provider.auth_url == 'fake':
             return fakeprovider.FAKE_CLIENT
         return novaclient.client.Client(*args, **kwargs)
