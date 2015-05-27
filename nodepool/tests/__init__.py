@@ -39,7 +39,6 @@ class LoggingPopen(subprocess.Popen):
 
 
 class BaseTestCase(testtools.TestCase, testresources.ResourcedTestCase):
-
     def setUp(self):
         super(BaseTestCase, self).setUp()
         test_timeout = os.environ.get('OS_TEST_TIMEOUT', 60)
@@ -79,11 +78,8 @@ class BaseTestCase(testtools.TestCase, testresources.ResourcedTestCase):
         self.setUpFakes()
 
     def setUpFakes(self):
-        self.useFixture(fixtures.MonkeyPatch('keystoneclient.v2_0.client.'
-                                             'Client',
-                                             fakeprovider.FakeKeystoneClient))
-        self.useFixture(fixtures.MonkeyPatch('glanceclient.client.Client',
-                                             fakeprovider.FakeGlanceClient))
+        self.useFixture(fixtures.MonkeyPatch('shade.openstack_cloud',
+                                             fakeprovider.get_fake_client))
         self.useFixture(fixtures.MonkeyPatch('novaclient.client.Client',
                                              fakeprovider.FakeClient))
 
@@ -226,3 +222,8 @@ class DBTestCase(BaseTestCase):
                     break
                 time.sleep(1)
         self.wait_for_threads()
+
+
+class IntegrationTestCase(DBTestCase):
+    def setUpFakes(self):
+        pass

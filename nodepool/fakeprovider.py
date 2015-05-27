@@ -22,6 +22,7 @@ import time
 import uuid
 
 from jenkins import JenkinsException
+import shade
 
 
 class Dummy(object):
@@ -35,7 +36,8 @@ class Dummy(object):
     def update(self, data):
         try:
             if self.should_fail:
-                raise RuntimeError('This image has SHOULD_FAIL set to True.')
+                raise shade.OpenStackCloudException('This image has '
+                                                    'SHOULD_FAIL set to True.')
         except AttributeError:
             pass
 
@@ -51,6 +53,26 @@ def get_fake_images_list():
                                            name='Fake Precise',
                                            metadata={})])
     return fake_images_list
+
+
+BAD_CLIENT = None
+
+
+def get_bad_client():
+    global BAD_CLIENT
+    if BAD_CLIENT is None:
+        BAD_CLIENT = BadOpenstackCloud()
+    return BAD_CLIENT
+
+
+FAKE_CLIENT = None
+
+
+def get_fake_client(**kwargs):
+    global FAKE_CLIENT
+    if FAKE_CLIENT is None:
+        FAKE_CLIENT = FakeOpenStackCloud()
+    return FAKE_CLIENT
 
 
 class FakeList(object):
@@ -143,21 +165,24 @@ class BadClient(FakeClient):
         self.client = BadHTTPClient()
 
 
+class BadOpenstackCloud(object):
+    nova_client = BadClient()
+
+
 class FakeGlanceClient(object):
-    def __init__(self, *args, **kwargs):
-        self.id = 'fake-glance-id'
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
         self.images = get_fake_images_list()
 
 
-class FakeServiceCatalog(object):
-    def url_for(self, **kwargs):
-        return 'fake-url'
+class FakeOpenStackCloud(object):
+    nova_client = FakeClient()
+    _glance_client = FakeGlanceClient()
 
-
-class FakeKeystoneClient(object):
-    def __init__(self, **kwargs):
-        self.service_catalog = FakeServiceCatalog()
-        self.auth_token = 'fake-auth-token'
+    def create_image(self, **kwargs):
+        image = self._glance_client.images.create(**kwargs)
+        image.update('fake data')
+        return image
 
 
 class FakeFile(StringIO.StringIO):
@@ -236,7 +261,3 @@ class FakeJenkins(object):
                  {u'name': u'test-view',
                   u'url': u'https://jenkins.example.com/view/test-view/'}]}
         return d
-
-
-FAKE_CLIENT = FakeClient()
-BAD_CLIENT = BadClient()
