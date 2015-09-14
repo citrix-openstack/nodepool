@@ -20,4 +20,3 @@ six>=1.7.0
 shade
 diskimage-builder
 voluptuous
-MySQL-python
