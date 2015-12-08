@@ -492,15 +492,6 @@ class NodeLauncher(threading.Thread):
 
         self.node.ip_private = server.get('private_v4')
         self.node.ip = ip
-<<<<<<< HEAD
-        self.log.debug("Node id: %s is running, ipv4: %s, ipv6: %s" %
-                       (self.node.id, server.get('public_v4'),
-                        server.get('public_v6')))
-
-        self.log.debug("Node id: %s testing ssh at ip: %s" %
-                       (self.node.id, ip))
-        connect_kwargs = dict(key_filename=self.image.private_key)
-=======
         connect_kwargs = dict(key_filename=self.image.private_key)
 
         self.waitForLaunchStamp(ip, self.image.username, connect_kwargs)
@@ -508,7 +499,6 @@ class NodeLauncher(threading.Thread):
         self.log.debug("Node id: %s is running, ip: %s, testing ssh" %
                        (self.node.id, ip))
 
->>>>>>> Support nodes with launch condition
         if not utils.ssh_connect(ip, self.image.username,
                                  connect_kwargs=connect_kwargs,
                                  timeout=self.timeout):
