@@ -493,7 +493,7 @@ class NodeLauncher(threading.Thread):
         self.node.ip_private = server.get('private_v4')
         self.node.ip = ip
         self.log.debug("Node id: %s is running, ipv4: %s, ipv6: %s" %
-                       (self.node.id, server.get('public_v4'),
+                       (self.node.id, ip,
                         server.get('public_v6')))
 
         self.log.debug("Node id: %s testing ssh at ip: %s" %
@@ -1161,6 +1161,8 @@ class SnapshotImageUpdater(ImageUpdater):
         if not ip:
             raise Exception("Unable to find public IP of server")
         server['public_ip'] = ip
+
+        self.installServer(server, key, use_password=use_password)
 
         self.installServer(server, key, use_password=use_password)
 
