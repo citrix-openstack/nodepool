@@ -1139,7 +1139,7 @@ class SnapshotImageUpdater(ImageUpdater):
                        "/usr/local/bin:/bin:/usr/bin"
             host.ssh("run setup script",
                      "%s; cd /opt/nodepool-scripts "
-                     "&& %s ./%s %s && sync && sleep 5" %
+                     "&& %s ./%s %s" %
                      (set_path, env_vars, self.image.setup, server['name']))
 
     def installServer(self, server, key, use_password=False):
