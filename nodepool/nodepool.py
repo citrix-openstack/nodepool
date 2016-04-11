@@ -1236,6 +1236,12 @@ class NodePool(threading.Thread):
         nodepool_config.loadSecureConfig(config, self.securefile)
         return config
 
+    def reconfigureDatabase(self, config):
+        if (not self.config) or config.dburi != self.config.dburi:
+            config.db = nodedb.NodeDatabase(config.dburi)
+        else:
+            config.db = self.config.db
+
     def reconfigureManagers(self, config, check_targets=True):
         provider_manager.ProviderManager.reconfigure(self.config, config)
 
