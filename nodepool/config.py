@@ -1,3 +1,4 @@
+import os
 import os_client_config
 from six.moves import configparser as ConfigParser
 import yaml
@@ -95,6 +96,8 @@ def loadConfig(config_path):
     cloud_config = os_client_config.OpenStackConfig()
 
     newconfig = Config()
+    hostname = os.uname()[1]
+    newconfig.nodepool_name = config.get('nodepool-name', hostname)
     newconfig.db = None
     newconfig.dburi = None
     newconfig.providers = {}
@@ -137,6 +140,7 @@ def loadConfig(config_path):
 
     for provider in config.get('providers', []):
         p = Provider()
+        p.nodepool_name = newconfig.nodepool_name
         p.name = provider['name']
         newconfig.providers[p.name] = p
 
