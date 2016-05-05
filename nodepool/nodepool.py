@@ -1010,8 +1010,8 @@ class SnapshotImageUpdater(ImageUpdater):
 
         self.waitForShutOffIfRequested(server_id)
 
-        image_id = self.manager.createImage(server_id, hostname,
-                                            self.image.meta)
+        image_id = self.manager.createImage(server, hostname,
+                                            self.image.meta)['id']
         self.snap_image.external_id = image_id
         session.commit()
         self.log.debug("Image id: %s building image %s" %
