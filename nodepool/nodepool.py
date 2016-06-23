@@ -1330,7 +1330,13 @@ class SnapshotImageUpdater(ImageUpdater):
         remaining_polls = self.image.install_poll_count
 
         while remaining_polls:
-            host = self.getSSHConnection(server, key, log, use_password)
+            try:
+                host = self.getSSHConnection(server, key, log, use_password)
+            except Exception as e:
+                self.log.info("Poll %s: Ignored ssh connection error %s",
+                              remaining_polls,
+                              e)
+                host = None
             if host:
                 status = host.ssh(
                     "check install status",
