@@ -224,12 +224,18 @@ def loadConfig(config_path):
                 'wait-for-shutoff-before-snapshot', False)
             i.shutoff_poll_interval = image.get('shutoff-poll-interval', 0)
             i.shutoff_poll_count = image.get('shutoff-poll-count', 0)
+            i.launch_done_stamp = image.get('launch-done-stamp')
+            i.launch_poll_interval = image.get('launch-poll-interval', 10)
+            i.launch_poll_count = image.get('launch-poll-count', 40)
             i.diskimage = image.get('diskimage', None)
             i.username = image.get('username', 'jenkins')
             i.user_home = image.get('user-home', '/home/jenkins')
             i.private_key = image.get('private-key',
                                       '/var/lib/jenkins/.ssh/id_rsa')
             i.config_drive = image.get('config-drive', None)
+            i.launch_done_stamp = image.get('launch-done-stamp')
+            i.launch_poll_interval = image.get('launch-poll-interval', 10)
+            i.launch_poll_count = image.get('launch-poll-count', 40)
 
             # note this does "double-duty" -- for
             # SnapshotImageUpdater the meta-data dict is passed to
