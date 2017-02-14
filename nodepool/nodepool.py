@@ -1126,6 +1126,7 @@ class SnapshotImageUpdater(ImageUpdater):
         else:
             ssh_kwargs['password'] = server['admin_pass']
 
+        ssh_kwargs = dict(key_filename=self.image.private_key)
         host = utils.ssh_connect(server['public_ip'], 'root', ssh_kwargs,
                                  timeout=CONNECT_TIMEOUT)
 
@@ -1192,7 +1193,7 @@ class SnapshotImageUpdater(ImageUpdater):
                        "/usr/local/bin:/bin:/usr/bin"
             host.ssh("run setup script",
                      "%s; cd /opt/nodepool-scripts "
-                     "&& %s ./%s %s && sync && sleep 5" %
+                     "&& %s ./%s %s" %
                      (set_path, env_vars, self.image.setup, server['name']))
 
 
