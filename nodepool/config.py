@@ -215,6 +215,15 @@ def loadConfig(config_path):
             i.min_ram = image['min-ram']
             i.name_filter = image.get('name-filter', None)
             i.setup = image.get('setup', None)
+            i.install = image.get('install')
+            i.install_done_stamp = image.get('install-done-stamp', None)
+            i.install_poll_interval = image.get('install-poll-interval',
+                                                10)
+            i.install_poll_count = image.get('install-poll-count', 60)
+            i.wait_for_shutoff_before_snapshot = image.get(
+                'wait-for-shutoff-before-snapshot', False)
+            i.shutoff_poll_interval = image.get('shutoff-poll-interval', 0)
+            i.shutoff_poll_count = image.get('shutoff-poll-count', 0)
             i.diskimage = image.get('diskimage', None)
             i.username = image.get('username', 'jenkins')
             i.user_home = image.get('user-home', '/home/jenkins')

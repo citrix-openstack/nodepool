@@ -1019,7 +1019,11 @@ class SnapshotImageUpdater(ImageUpdater):
             raise Exception("Unable to find public IP of server")
         server['public_ip'] = ip
 
+        self.installServer(server, key, use_password=use_password)
+
         self.bootstrapServer(server, key, use_password=use_password)
+
+        self.waitForShutOffIfRequested(server_id)
 
         image_id = self.manager.createImage(server, hostname,
                                             self.image.meta)['id']
@@ -1057,10 +1061,27 @@ class SnapshotImageUpdater(ImageUpdater):
                                " %s for image id: %s" %
                                (server_id, self.snap_image.id))
 
-    def bootstrapServer(self, server, key, use_password=False):
-        log = logging.getLogger("nodepool.image.build.%s.%s" %
-                                (self.provider.name, self.image.name))
+    def serverIsOff(self, server_id):
+        return self.manager.getServer(server_id)['status'] == 'SHUTOFF'
 
+    def waitForShutOffIfRequested(self, server_id):
+        if not self.image.wait_for_shutoff_before_snapshot:
+            return
+
+        remaining_sleeps = self.image.shutoff_poll_count
+        while remaining_sleeps:
+            if self.serverIsOff(server_id):
+                self.log.debug("Server in SHUTOFF state, no more sleeps")
+                break
+            self.log.debug("%s more sleep(s) to wait for SHUTOFF",
+                           remaining_sleeps)
+            time.sleep(self.image.shutoff_poll_interval)
+            remaining_sleeps -= 1
+
+        if not self.serverIsOff(server_id):
+            raise Exception("Cloud reports, server is still not in SHUTOFF")
+
+    def getSSHConnection(self, server, key, log, use_password):
         ssh_kwargs = dict(log=log)
         if not use_password:
             ssh_kwargs['pkey'] = key
@@ -1088,6 +1109,10 @@ class SnapshotImageUpdater(ImageUpdater):
         if not host:
             raise Exception("Unable to log in via SSH")
 
+        return host
+
+    def copyNodepoolScripts(self, host):
+        host.ssh("make scripts dir", "mkdir -p scripts")
         # /etc/nodepool is world writable because by the time we write
         # the contents after the node is launched, we may not have
         # sudo access any more.
@@ -1104,6 +1129,15 @@ class SnapshotImageUpdater(ImageUpdater):
                      "sudo mv scripts /opt/nodepool-scripts")
             host.ssh("set scripts permissions",
                      "sudo chmod -R a+rx /opt/nodepool-scripts")
+
+    def bootstrapServer(self, server, key, use_password=False):
+        log = logging.getLogger("nodepool.image.build.%s.%s" %
+                                (self.provider.name, self.image.name))
+        host = self.getSSHConnection(server, key, log, use_password)
+        if not host:
+            raise Exception("Unable to log in via SSH")
+
+        self.copyNodepoolScripts(host)
 
         if self.image.setup:
             env_vars = ''
@@ -1122,6 +1156,54 @@ class SnapshotImageUpdater(ImageUpdater):
                      "%s; cd /opt/nodepool-scripts "
                      "&& %s ./%s %s && sync && sleep 5" %
                      (set_path, env_vars, self.image.setup, server['name']))
+
+
+    def installServer(self, server, key, use_password=False):
+        if not self.image.install:
+            return
+
+        log = logging.getLogger("nodepool.image.install.%s.%s" %
+                                (self.provider.name, self.image.name))
+
+        host = self.getSSHConnection(server, key, log, use_password)
+        if not host:
+            raise Exception("Unable to log in via SSH")
+
+        self.copyNodepoolScripts(host)
+
+        host.ssh("run install script",
+                 "cd /opt/nodepool-scripts && %s ./%s" % (
+                     get_nodepool_env_string(), self.image.install))
+
+        host.close()
+        self.waitForInstallationToCompete(server, key, use_password)
+
+    def waitForInstallationToCompete(self, server, key, use_password):
+        if not self.image.install_done_stamp:
+            return
+
+        log = logging.getLogger("nodepool.image.install.wait.%s.%s" %
+                                (self.provider.name, self.image.name))
+
+        remaining_polls = self.image.install_poll_count
+
+        while remaining_polls:
+            host = self.getSSHConnection(server, key, log, use_password)
+            if host:
+                status = host.ssh(
+                    "check install status",
+                    "test -e %s && echo DONE || true" % (
+                        self.image.install_done_stamp),
+                    output=True)
+                host.close()
+                status = status or ''
+                if "DONE" in status:
+                    return
+            remaining_polls -= 1
+            time.sleep(self.image.install_poll_interval)
+
+        raise Exception(
+            'Failed to install host - max number of polls reached')
 
 
 class NodePool(threading.Thread):
@@ -2385,3 +2467,12 @@ class NodePool(threading.Thread):
         for key in keys:
             self.statsd.timing(key, dt)
             self.statsd.incr(key)
+
+
+def get_nodepool_env_string():
+    env_vars = ''
+    for k, v in os.environ.items():
+        if k.startswith('NODEPOOL_'):
+            env_vars= ' %s="%s"' % (k, v)
+
+    return env_vars
